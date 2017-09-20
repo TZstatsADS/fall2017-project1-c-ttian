@@ -1,5 +1,5 @@
 # Fall 2017
-# Project 1: Estimate Donald Trump?s Chance of Re-election
+# Project 1: Estimate Donald Trump's Chance of Re-election
 
 ![image](figs/title.jpg)
 
