@@ -1,0 +1,321 @@
+---
+title: "Estimate Trump's Chance of Re-election based on NLP of Inaugural Address"
+author: "Tiantian Chen (tc2818)"
+output:
+  html_document: default
+  html_notebook: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Part 0: Evironment Preparation and Data Processing
+
+Firstly of all, let's check if all R packages we need in the following part have been installed. After that, we can load these packages so that this notebook will be prepared with the required environmental settings.
+
+```{r, message=FALSE, warning=FALSE}
+packages.used=c("rvest", "tibble", "qdap", 
+                "sentimentr", "gplots", "dplyr",
+                "tm", "syuzhet", "factoextra", 
+                "beeswarm", "scales", "RColorBrewer",
+                "RANN", "koRpus", "ggplot2")
+
+# check packages that need to be installed.
+packages.needed=setdiff(packages.used, 
+                        intersect(installed.packages()[,1], 
+                                  packages.used))
+# install additional packages
+if(length(packages.needed)>0){
+  install.packages(packages.needed, dependencies = TRUE)
+}
+
+# load packages
+library("rvest")
+library("tibble")
+library("qdap")
+library("sentimentr")
+library("gplots")
+library("dplyr")
+library("tm")
+library("syuzhet")
+library("factoextra")
+library("beeswarm")
+library("scales")
+library("RColorBrewer")
+library("RANN")
+library("koRpus")
+library("ggplot2")
+
+source("../lib/plotstacked.R")
+source("../lib/speechFuncs.R")
+```
+
+Secondly, we are going to scrap speeches we need from <http://www.presidency.ucsb.edu/>. For this project, we choose to scrap all the links of inaugural addresses of past presidents. 
+
+```{r, message=FALSE, warning=FALSE}
+### Inauguaral speeches
+main.page <- read_html(x = "http://www.presidency.ucsb.edu/inaugurals.php")
+# Get link URLs
+# f.speechlinks is a function for extracting links from the list of speeches. 
+inaug=f.speechlinks(main.page)
+#head(inaug)
+#as.Date(inaug[,1], format="%B %e, %Y")
+inaug=inaug[-nrow(inaug),] # remove the last line, irrelevant due to error.
+inaug.list=read.csv("../data/InaugurationInfo.csv", stringsAsFactors = FALSE)
+inaug.list$type=rep("inaug", nrow(inaug.list))
+inaug.list=cbind(inaug.list, inaug)
+```
+
+Thirdly, based on the list of speeches, we scrap the main text part of the transcript's html page. For reproducibility, we also save our scrapped speeches into our local folder as individual speech files. 
+
+```{r}
+# Loop over each row in inaug.list
+inaug.list$fulltext=NA
+for(i in seq(nrow(inaug.list))) {
+  text <- read_html(inaug.list$urls[i]) %>% # load the page
+    html_nodes(".displaytext") %>% # isloate the text
+    html_text() # get the text
+  inaug.list$fulltext[i]=text
+  # Create the file name
+  filename <- paste0("../data/InauguralSpeeches/", 
+                     inaug.list$type[i],
+                     inaug.list$File[i], "-", 
+                     inaug.list$Term[i], ".txt")
+  sink(file = filename) %>% # open file to write 
+  cat(text)  # write the file
+  sink() # close the file
+}
+```
+
+Finally, for the convenience of analysis and comparation, we devide all presidents into two groups. Those who are in the first group have only one presidential term. Those who are in group 2 have more than one presidential term. 
+
+```{r}
+#find the rows for presidents who have more than one term
+more_term<-sort(c(which(inaug.list$Term==2)-1,which(inaug.list$Term==2),39),decreasing = F)
+inaug.list$whichdata<-NA
+inaug.list$whichdata[-more_term]<-1
+inaug.list$whichdata[more_term]<-2
+#seperate the dataframe into two parts
+inaug.list_Uni<-inaug.list[-more_term,]
+inaug.list_notUni<-inaug.list[more_term,]
+```
+
+
+
+# Part 1. Exploring the effect of speech format
+
+As we all know, every document is a mixture of sentences. Every sentences is a mixture of words. Sentences are natural languge units for organizing thoughts and ideas, and words they contain express their meaning. Therefore, to analyze the speeches, we first explore the length of each setences, which means how many words are contained in a sentences. Then, we will also explore the words. We are going to measure the reading level of inaugural speeches for each president based one the index named Flesch-Kincaid score, where word will be the unit of analysis.
+
+### 1.1 Stability of length of sentences in a speech do matter
+
+At the beginning, we split the whole transcript into sentences so that we can calculate the number of words in each sentence. (Note that we will also complete the emotion analysis at the same time, which will be helpful for the sentiment analysis in part 2. Here we make the calculation simultaneously in order to make this report neatly.) 
+
+```{r, message=FALSE, warning=FALSE}
+#### for thoes who only have one term
+sentence.list_Uni=NULL
+for(i in 1:nrow(inaug.list_Uni)){
+  sentences=sent_detect(inaug.list_Uni$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list_Uni=rbind(sentence.list_Uni, 
+                        cbind(inaug.list_Uni[i,-ncol(inaug.list_Uni)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+# Some non-sentences exist in raw data due to erroneous extra end-of sentence marks. 
+sentence.list_Uni=
+  sentence.list_Uni%>%
+  filter(!is.na(word.count)) 
+  
+  
+#### for thoes who have more than one term
+sentence.list_notUni=NULL
+for(i in 1:nrow(inaug.list_notUni)){
+  sentences=sent_detect(inaug.list_notUni$fulltext[i],
+                        endmarks = c("?", ".", "!", "|",";"))
+  if(length(sentences)>0){
+    emotions=get_nrc_sentiment(sentences)
+    word.count=word_count(sentences)
+    # colnames(emotions)=paste0("emo.", colnames(emotions))
+    # in case the word counts are zeros?
+    emotions=diag(1/(word.count+0.01))%*%as.matrix(emotions)
+    sentence.list_notUni=rbind(sentence.list_notUni, 
+                        cbind(inaug.list_notUni[i,-ncol(inaug.list_notUni)],
+                              sentences=as.character(sentences), 
+                              word.count,
+                              emotions,
+                              sent.id=1:length(sentences)
+                              )
+    )
+  }
+}
+# Some non-sentences exist in raw data due to erroneous extra end-of sentence marks. 
+sentence.list_notUni=
+  sentence.list_notUni%>%
+  filter(!is.na(word.count))   
+
+```
+
+
+```{r, fig.width = 3, fig.height = 3}
+
+par(mar=c(4, 11, 2, 2))
+
+#sel.comparison=levels(sentence.list$FileOrdered)
+
+sentence.list_Uni$File=factor(sentence.list_Uni$File)
+
+sentence.list_Uni$FileOrdered=reorder(sentence.list_Uni$File, 
+                                  sentence.list_Uni$word.count, 
+                                  mean, 
+                                  order=T)
+sentence.list_Uni$whichdata<-rep(1,nrow(sentence.list_Uni))
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list_Uni,
+         horizontal = TRUE, 
+         pch=16, col="lightpink", 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list_Uni$FileOrdered),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Inaugural speeches in group 1")
+
+
+
+par(mar=c(4, 11, 2, 2))
+sentence.list_notUni$File=factor(sentence.list_notUni$File)
+
+sentence.list_notUni$FileOrdered=reorder(sentence.list_notUni$File, 
+                                  sentence.list_notUni$word.count, 
+                                  mean, 
+                                  order=T)
+sentence.list_notUni$whichdata<-rep(2,nrow(sentence.list_notUni))
+
+beeswarm(word.count~FileOrdered, 
+         data=sentence.list_notUni,
+         horizontal = TRUE, 
+         pch=16, col="lightblue", 
+         cex=0.55, cex.axis=0.8, cex.lab=0.8,
+         spacing=5/nlevels(sentence.list_notUni$FileOrdered),
+         las=2, xlab="Number of words in a sentence.", ylab="",
+         main="Inaugural speeches in group 2")
+```
+
+In fact, length of sentences varies in both groups. It's hard to tell which group tend to have a longer sentence. However, we notice that the length of sentences are more stable in group 2, as it's obviously that data in group 2 are more concentrated. In another words, presidents who have more than one term use sentences with more similar length than those who only have one term.
+
+```{r}
+sentence.list<-rbind(sentence.list_Uni,sentence.list_notUni)
+list_by_wordcount<-split(sentence.list,sentence.list$Words)
+var_wordcount<-rep(NA,length(list_by_wordcount))
+for(i in 1:length(list_by_wordcount)){
+  var_wordcount[i]<-var(list_by_wordcount[[i]]$word.count)
+}
+
+var_trump<-var_wordcount[length(var_wordcount)]
+boxplot(var_wordcount,col = "lightgreen", main="variance of sentence length")
+abline(h=var_trump,col="red")
+```
+
+As we can see, lengths of sentences in Trump's inaugural speech are quite stable compare to the overall performance of all presidents. From this aspective, Trump's chance of winning re-election is big.
+
+# 1.2 Higher reading level positively relates to change of re-election
+
+Many people might be not happy with the judgement we make in the previous part, which states that Trump's chance of winning re-election is big. But don't worry. As we know, what that matter in a speech are not only lengths of sentences, but also words it contains. Now we are going to measure to reading level of inaugural speeches.
+
+To determine reading level, we???re using Flesch-Kincaid grade level score. It???s a formula originally developed for the U.S. Navy to judge the relative difficulty of manuals, teaching aides, and procedures that???s been adapted to map to U.S. grade level. The formula is:
+
+$$0.39 (total words / total sentences) + 11.8 (total syllables / total words) ??? 15.59$$
+
+There is no upper limit to the Flesch-Kincaid score, which is why some inaugurals rate well above the 12th-grade level.
+
+```{r,warning=F, message=FALSE, warning=F,results='hide'}
+####### for thoes who only have one term
+
+#loop through each text
+FleshKincaid.score.vec=rep(0,nrow(inaug.list_Uni))
+for (i in 1:nrow(inaug.list_Uni)){
+  #tokenize
+  tagged.text <- tokenize(inaug.list_Uni$fulltext[i], format="obj", lang='en')
+  #Flesch Reading Ease Score 
+  FleshKincaid.score.vec[i]=as.numeric(summary(flesch.kincaid(tagged.text)))[4]
+}
+
+inaug.list_Uni$FleshKincaid<-FleshKincaid.score.vec
+
+####### for thoes who have more than one term
+
+#loop through each text
+FleshKincaid.score.vec=rep(0,nrow(inaug.list_notUni))
+for (i in 1:nrow(inaug.list_notUni)){
+  #tokenize
+  tagged.text <- tokenize(inaug.list_notUni$fulltext[i], format="obj", lang='en')
+  #Flesch Reading Ease Score 
+  FleshKincaid.score.vec[i]=as.numeric(summary(flesch.kincaid(tagged.text)))[4]
+}
+
+inaug.list_notUni$FleshKincaid<-FleshKincaid.score.vec
+
+#boxplot(inaug.list_notUni$FleshKincaid,inaug.list_Uni$FleshKincaid,horizontal=TRUE,
+#       main='Reading Level of Inaugural Speeches')
+```
+
+```{r}
+inaug.list$FleshKincaid<-c(inaug.list_Uni$FleshKincaid,inaug.list_notUni$FleshKincaid)
+ggplot(inaug.list, aes(x=as.factor(whichdata), y=FleshKincaid, fill=whichdata)) + 
+    geom_boxplot() +
+    guides(fill=FALSE)+
+    xlab("Group") + ylab("FleshKincaid Score") +
+    ggtitle("Reading Level of Inaugural Speeches")
+
+```
+
+As we can see, inaugural speeches by presidents in group 2, who have more than one term, have a significant better performance in the reading level, since their average value of Flesch-Kincaid score are much higher than that of the other group.
+
+Trump's score in this part is 8th Grade, compared to a average performance of 15th Grade. It ranks 55 in the last position among all 58 presidents. In other words, his inaugural speech, with a low reading level, assume that his change of re-election are small.
+
+# Part 2. Explore the effect of sentiments delivered in speeches
+
+As we mentioned before, we have already calculated the contributions of 10 sentiments to each speeches. The sentiments we detect here are: anger, anticipation, disgust, fear, joy, sadness, surprise, trust, negative, positive.
+
+```{r}
+sentiments<-data.frame(sentiment=rep(NA,20),data=rep(NA,20),group=c(rep(1,10),rep(2,10)))
+sentiments$sentiment<-rep(colnames(sentence.list_Uni[12:21]),2)
+sentiments$data[1:10]<-apply(sentence.list_Uni[12:21],2,mean)
+sentiments$data[11:20]<-apply(sentence.list_notUni[12:21],2,mean)
+
+ggplot(data=sentiments, aes(y=data, x=as.factor(sentiment), fill=as.factor(group))) +
+  geom_bar(stat="identity", position=position_dodge())+
+  ggtitle("Percentage of contibutions by each sentiment for two groups") +
+  xlab("Sentiments") + ylab("Percentage")+
+  labs(fill = "Group")
+
+```
+
+We are surprised to find that the sentiment constitution in the inaugural speeches of two group are very similar. Therefore, it's almost impossible to extract the features on sentiment constitution for each group and then put Trump into one of then. However, we can achieve our goal by finding the connenction between Trump and other presidents according to the contributions of sentiments.
+
+```{r}
+l_by_president<-split(sentence.list,sentence.list$President)
+lp<-length(l_by_president)
+collect_sentiment<-matrix(rep(NA,lp*10), lp,10)
+colnames(collect_sentiment)<-colnames(sentence.list)[12:21]
+rownames(collect_sentiment)<-unique(sentence.list$President)
+for(i in 1:lp){
+  collect_sentiment[i,]<-apply(as.matrix(l_by_president[[i]][,12:21]),2,mean)
+}
+heatmap.2(collect_sentiment,cexRow = 0.35, main="sentiments of inaugural speeches" )
+```
+
+As shown by the heatmap, we find that among all former presidents of the United States, the one whose inaugural speeches has a maximum similarity to that of Trump is Franklin D. Roosevelt! This result is so amazing since Franklin D. Roosevelt is the only president that have more than two terms in the history of American by far. He had been the president of the United States for four term. From this point, president Donald Trump is very possible to win the election again!
