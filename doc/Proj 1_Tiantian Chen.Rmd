@@ -1,5 +1,6 @@
 ---
-title: "Estimate Trump's Chance of Re-election based on NLP of Inaugural Address"
+title: "Estimate Donald Trump's Chance of Re-election"
+subtitle: "Based on NLP of Inaugural Address"
 author: "Tiantian Chen (tc2818)"
 output:
   html_document: default
@@ -12,6 +13,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+# Overview
+
+In this project, we are going to use text mining and sentiment analysis to estimate Donald Trump's chance of winning re-election if he attend the election next time. The general idea is: we devide all former presidents in the history of America into two groups, accroding to whether they have more than one presidential term. By analyzing their performance in the inaugural addresses and finding some particular features, we can tell which group Donald Trump is more likely to be put into. We measure the performance of Donald Trump in his inaugural speech so that we can estimate his change of re-election.
+
+To analyze the inaugural speeches, we explore both format and content. In part 1, which focuses on the format of speeches, we find that more stable the length of sentences in a speech, bigger the chance of re-election is. In addition, higher reading level positively relates to change of re-election. In part 2, which focuses on the content, especially sentiments delivered into the speech, we find that Trump's speech has a very similar style to that of Franklin D. Roosevelt, which is very interesting.
+ 
 # Part 0: Evironment Preparation and Data Processing
 
 Firstly of all, let's check if all R packages we need in the following part have been installed. After that, we can load these packages so that this notebook will be prepared with the required environmental settings.
